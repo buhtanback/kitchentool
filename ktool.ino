@@ -11,7 +11,7 @@ void updateWeather();
 void updateCurrentTime();
 void showWeather();
 void showStopwatch();
-void showWelcomeScreen(); // Оголошення нової функції
+void showWelcomeScreen();
 float measureDistance();
 bool isDistanceStable(float currentDistance);
 void checkObjectDetection(unsigned long currentMillis);
@@ -60,7 +60,7 @@ void setup() {
     u8g2.begin();
     pinMode(TRIGGER_PIN, OUTPUT);
     pinMode(ECHO_PIN, INPUT);
-    showImage(); // Тепер викликаємо функцію для відображення зображення
+    showImage(); // Виклик функції для відображення зображення
     connectToWiFi();
     updateTime();
     updateWeather();
@@ -159,29 +159,25 @@ void showStopwatch() {
 
     u8g2.clearBuffer();
 
-    // Встановіть шрифт для заголовка "Секундомір"
-    u8g2.setFont(u8g2_font_cu12_t_cyrillic); // Використовується стандартний шрифт для заголовка
+    u8g2.setFont(u8g2_font_cu12_t_cyrillic);
     u8g2.setCursor(0, 15);
     u8g2.print("Секундомір");
 
-    // Встановіть більший шрифт для секунд і хвилин
-    u8g2.setFont(u8g2_font_ncenB24_tr); // Використовується більший шрифт для цифр
-    String timeStr = String(minutes) + ":" + String(seconds);
-    
-    // Визначте розміри тексту
-    uint8_t textWidth = u8g2.getStrWidth(timeStr.c_str());
+    u8g2.setFont(u8g2_font_ncenB24_tr);
+    char timeStr[6];
+    sprintf(timeStr, "%02d:%02d", minutes, seconds);
+
+    uint8_t textWidth = u8g2.getStrWidth(timeStr);
     uint8_t textHeight = u8g2.getMaxCharHeight();
 
-    // Розрахуйте координати для центрування тексту
-    uint8_t x = (128 - textWidth) / 2; // 128 - ширина екрану
-    uint8_t y = (64 - textHeight) / 2 + textHeight; // 64 - висота екрану
+    uint8_t x = (128 - textWidth) / 2;
+    uint8_t y = (64 - textHeight) / 2 + textHeight;
 
     u8g2.setCursor(x, y);
     u8g2.print(timeStr);
 
     u8g2.sendBuffer();
 
-    // Оновлення серійного монітора
     if (millis() - lastSerialUpdateTime >= serialUpdateInterval && seconds != lastPrintedSecond) {
         Serial.printf("Stopwatch time: %02d:%02d\n", minutes, seconds);
         lastSerialUpdateTime = millis();
@@ -217,15 +213,15 @@ void updateTime() {
 
         if (httpCode > 0) {
             String payload = http.getString();
-            Serial.println("Payload: " + payload);  // Додано для налагодження
+            Serial.println("Payload: " + payload);
             DynamicJsonDocument doc(1024);
             deserializeJson(doc, payload);
             String dateTime = doc["datetime"];
-            currentDate = dateTime.substring(2, 4) + "-" + dateTime.substring(5, 7) + "-" + dateTime.substring(8, 10); // Витягнути дату в потрібному форматі
-            currentTime = dateTime.substring(11, 19); // Витягнути час з datetime
-            currentHour = currentTime.substring(0, 2).toInt();
-            currentMinute = currentTime.substring(3, 5).toInt();
-            currentSecond = currentTime.substring(6, 8).toInt();
+            currentDate = dateTime.substring(0, 10);
+            currentTime = dateTime.substring(11, 19);
+            currentHour = dateTime.substring(11, 13).toInt();
+            currentMinute = dateTime.substring(14, 16).toInt();
+            currentSecond = dateTime.substring(17, 19).toInt();
             lastMillis = millis();
             Serial.println("Time updated: " + currentTime);
             Serial.println("Date updated: " + currentDate);
@@ -239,9 +235,13 @@ void updateTime() {
 }
 
 void updateCurrentTime() {
-    currentSecond++;
+    unsigned long currentMillis = millis();
+    unsigned long elapsedMillis = currentMillis - lastMillis;
+    lastMillis = currentMillis;
+
+    currentSecond += elapsedMillis / 1000;
     if (currentSecond >= 60) {
-        currentSecond = 0;
+        currentSecond %= 60;
         currentMinute++;
         if (currentMinute >= 60) {
             currentMinute = 0;
@@ -262,7 +262,7 @@ void updateWeather() {
 
         if (httpCode > 0) {
             String payload = http.getString();
-            Serial.println("Weather Payload: " + payload);  // Додано для налагодження
+            Serial.println("Weather Payload: " + payload);
             DynamicJsonDocument doc(2048);
             deserializeJson(doc, payload);
             weatherDescription = doc["weather"][0]["description"].as<String>();
@@ -282,14 +282,15 @@ void showWeather() {
     u8g2.enableUTF8Print();
     u8g2.setFont(u8g2_font_cu12_t_cyrillic); 
     
-    String weatherInfo = String(weatherDescription) + " " + String(weatherTemp, 2) + " C";
+    String weatherInfo = weatherDescription + " " + String(weatherTemp, 2) + " C";
     u8g2.setCursor(0, 15);
     u8g2.print(weatherInfo);
 
     u8g2.setFont(u8g2_font_lubB18_tr); 
     
     // Створення строки для часу
-    String timeInfo = "\n" + String(currentHour) + ":" + String(currentMinute) + ":" + String(currentSecond);
+    char timeInfo[10];
+    sprintf(timeInfo, "%02d:%02d:%02d", currentHour, currentMinute, currentSecond);
     
     // Виведення часу
     u8g2.setCursor(0, 50);
