@@ -1,14 +1,16 @@
 #include "Cofnig.h"
 #include <WiFi.h>
-#include <HTTPClient.h>
+#include <NTPClient.h>
+#include <WiFiUdp.h>
 #include <ArduinoJson.h>
 #include <U8g2lib.h>
+#include <HTTPClient.h>
+
 
 // Оголошення функцій
 void connectToWiFi();
 void updateTime();
 void updateWeather();
-void updateCurrentTime();
 void showWeather();
 void showStopwatch();
 void showWelcomeScreen();
@@ -18,11 +20,6 @@ void checkObjectDetection(unsigned long currentMillis);
 
 // Налаштування дисплея
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
-
-String currentDate;
-String currentTime;
-int currentHour, currentMinute, currentSecond;
-unsigned long lastMillis;
 
 String weatherDescription;
 float weatherTemp;
@@ -55,6 +52,9 @@ const unsigned long debounceDelay = 500; // Затримка для уникне
 
 unsigned long lastDebounceTime = 0; // Час останнього спрацьовування
 
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pool.ntp.org", 10800, 60000);  // 10800 для UTC+3 (часовий пояс)
+
 void setup() {
     Serial.begin(115200);
     u8g2.begin();
@@ -62,7 +62,7 @@ void setup() {
     pinMode(ECHO_PIN, INPUT);
     showImage(); // Виклик функції для відображення зображення
     connectToWiFi();
-    updateTime();
+    timeClient.begin();  // Запуск NTPClient
     updateWeather();
 }
 
@@ -72,10 +72,10 @@ DisplayMode currentDisplayMode = WEATHER;
 void loop() {
     unsigned long currentMillis = millis();
 
-    // Оновлення часу кожну секунду
+    // Оновлення часу через NTP кожну секунду
     if (currentMillis - lastTimeUpdateMillis >= timeInterval) {
         lastTimeUpdateMillis = currentMillis;
-        updateCurrentTime();
+        timeClient.update();
         if (currentDisplayMode == WEATHER && !isStopwatchActive) {
             showWeather();
         }
@@ -204,55 +204,6 @@ void connectToWiFi() {
     }
 }
 
-void updateTime() {
-    if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("Attempting to update time...");
-        HTTPClient http;
-        http.begin("http://worldtimeapi.org/api/timezone/Europe/Kiev");
-        int httpCode = http.GET();
-
-        if (httpCode > 0) {
-            String payload = http.getString();
-            Serial.println("Payload: " + payload);
-            DynamicJsonDocument doc(1024);
-            deserializeJson(doc, payload);
-            String dateTime = doc["datetime"];
-            currentDate = dateTime.substring(0, 10);
-            currentTime = dateTime.substring(11, 19);
-            currentHour = dateTime.substring(11, 13).toInt();
-            currentMinute = dateTime.substring(14, 16).toInt();
-            currentSecond = dateTime.substring(17, 19).toInt();
-            lastMillis = millis();
-            Serial.println("Time updated: " + currentTime);
-            Serial.println("Date updated: " + currentDate);
-        } else {
-            Serial.println("HTTP GET failed: " + String(httpCode));
-        }
-        http.end();
-    } else {
-        Serial.println("Not connected to WiFi");
-    }
-}
-
-void updateCurrentTime() {
-    unsigned long currentMillis = millis();
-    unsigned long elapsedMillis = currentMillis - lastMillis;
-    lastMillis = currentMillis;
-
-    currentSecond += elapsedMillis / 1000;
-    if (currentSecond >= 60) {
-        currentSecond %= 60;
-        currentMinute++;
-        if (currentMinute >= 60) {
-            currentMinute = 0;
-            currentHour++;
-            if (currentHour >= 24) {
-                currentHour = 0;
-            }
-        }
-    }
-}
-
 void updateWeather() {
     if (WiFi.status() == WL_CONNECTED) {
         Serial.println("Attempting to update weather...");
@@ -290,7 +241,7 @@ void showWeather() {
     
     // Створення строки для часу
     char timeInfo[10];
-    sprintf(timeInfo, "%02d:%02d:%02d", currentHour, currentMinute, currentSecond);
+    sprintf(timeInfo, "%02d:%02d:%02d", timeClient.getHours(), timeClient.getMinutes(), timeClient.getSeconds());
     
     // Виведення часу
     u8g2.setCursor(0, 50);
