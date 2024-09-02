@@ -5,7 +5,7 @@
 #include <ArduinoJson.h>
 #include <U8g2lib.h>
 #include <HTTPClient.h>
-
+#include <time.h>  // Додано для обробки часу з Unix-формату
 
 // Оголошення функцій
 void connectToWiFi();
@@ -52,6 +52,9 @@ const unsigned long debounceDelay = 500; // Затримка для уникне
 
 unsigned long lastDebounceTime = 0; // Час останнього спрацьовування
 
+const long timeUpdateInterval = 600000; // Інтервал оновлення часу (10 хвилин)
+unsigned long lastTimeSyncMillis = 0;
+
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "pool.ntp.org", 10800, 60000);  // 10800 для UTC+3 (часовий пояс)
 
@@ -63,6 +66,7 @@ void setup() {
     showImage(); // Виклик функції для відображення зображення
     connectToWiFi();
     timeClient.begin();  // Запуск NTPClient
+    timeClient.update(); // Первинне оновлення часу
     updateWeather();
 }
 
@@ -72,10 +76,10 @@ DisplayMode currentDisplayMode = WEATHER;
 void loop() {
     unsigned long currentMillis = millis();
 
-    // Оновлення часу через NTP кожну секунду
+    // Оновлення часу NTP кожну секунду
     if (currentMillis - lastTimeUpdateMillis >= timeInterval) {
         lastTimeUpdateMillis = currentMillis;
-        timeClient.update();
+        timeClient.forceUpdate(); // Примусове оновлення часу NTP
         if (currentDisplayMode == WEATHER && !isStopwatchActive) {
             showWeather();
         }
@@ -117,6 +121,8 @@ void loop() {
         showStopwatch();
     }
 }
+
+
 
 bool isDistanceStable(float currentDistance) {
     if (lastMeasuredDistance < 0) return true; // Перше вимірювання
@@ -237,15 +243,27 @@ void showWeather() {
     u8g2.setCursor(0, 15);
     u8g2.print(weatherInfo);
 
-    u8g2.setFont(u8g2_font_lubB18_tr); 
-    
-    // Створення строки для часу
-    char timeInfo[10];
-    sprintf(timeInfo, "%02d:%02d:%02d", timeClient.getHours(), timeClient.getMinutes(), timeClient.getSeconds());
-    
+    // Встановлення більшого шрифту для часу та дати
+    u8g2.setFont(u8g2_font_ncenB14_tr); // Зміна шрифту на більший
+
+    // Отримання форматованого часу з NTP-клієнта
+    String formattedTime = timeClient.getFormattedTime();
+
     // Виведення часу
-    u8g2.setCursor(0, 50);
-    u8g2.print(timeInfo);
+    u8g2.setCursor(0, 40); // Координата Y для часу
+    u8g2.print(formattedTime);
+
+    // Отримання Unix-часу та конвертація в дату
+    time_t rawTime = timeClient.getEpochTime();
+    struct tm * timeInfo = localtime(&rawTime);
+
+    // Форматування дати
+    char dateStr[11]; // Рядок для дати
+    sprintf(dateStr, "%02d-%02d-%04d", timeInfo->tm_mday, timeInfo->tm_mon + 1, timeInfo->tm_year + 1900);
+
+    // Виведення дати під часом
+    u8g2.setCursor(0, 55); // Координата Y для дати
+    u8g2.print(dateStr);
 
     u8g2.sendBuffer();  
 }
