@@ -5,7 +5,8 @@
 #include <ArduinoJson.h>
 #include <U8g2lib.h>
 #include <HTTPClient.h>
-#include <time.h>  // Додано для обробки часу з Unix-формату
+#include <time.h>
+#include <TimeLib.h> 
 
 // Оголошення функцій
 void connectToWiFi();
@@ -56,7 +57,8 @@ const long timeUpdateInterval = 600000; // Інтервал оновлення �
 unsigned long lastTimeSyncMillis = 0;
 
 WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, "pool.ntp.org", 10800, 60000);  // 10800 для UTC+3 (часовий пояс)
+const long utcOffsetInSeconds = 10800;  // UTC+3
+NTPClient timeClient(ntpUDP, "time.nist.gov", utcOffsetInSeconds, 10000);  // Використовуйте новий офсет без додаткової компенсації
 
 void setup() {
     Serial.begin(115200);
@@ -66,7 +68,7 @@ void setup() {
     showImage(); // Виклик функції для відображення зображення
     connectToWiFi();
     timeClient.begin();  // Запуск NTPClient
-    timeClient.update(); // Первинне оновлення часу
+    syncTime();
     updateWeather();
 }
 
@@ -76,10 +78,10 @@ DisplayMode currentDisplayMode = WEATHER;
 void loop() {
     unsigned long currentMillis = millis();
 
-    // Оновлення часу NTP кожну секунду
+    // Оновлення часу раз на секунду
     if (currentMillis - lastTimeUpdateMillis >= timeInterval) {
         lastTimeUpdateMillis = currentMillis;
-        timeClient.forceUpdate(); // Примусове оновлення часу NTP
+        syncTime(); // Синхронізація часу
         if (currentDisplayMode == WEATHER && !isStopwatchActive) {
             showWeather();
         }
@@ -272,4 +274,14 @@ void showImage() {
     u8g2.clearBuffer();
     u8g2.drawBitmap(0, 0, 16, 128, image); // Переконайтесь, що `image` визначено правильно
     u8g2.sendBuffer();
+}
+
+void syncTime() {
+    if (!timeClient.update()) {
+        Serial.println("Failed to update time, retrying...");
+        timeClient.forceUpdate(); 
+    } else {
+        Serial.println("Time updated successfully.");
+        setTime(timeClient.getEpochTime());
+    }
 }
