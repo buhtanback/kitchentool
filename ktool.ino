@@ -56,6 +56,12 @@ unsigned long lastDebounceTime = 0; // Час останнього спраць�
 const long timeUpdateInterval = 600000; // Інтервал оновлення часу (10 хвилин)
 unsigned long lastTimeSyncMillis = 0;
 
+const int DISTANCE_DISPLAY_THRESHOLD = 5; 
+
+bool isLogoDisplayed = false;  // Змінна для відстеження стану логотипу
+bool toggleLogo = false; 
+
+
 WiFiUDP ntpUDP;
 const long utcOffsetInSeconds = 10800;  // UTC+3
 NTPClient timeClient(ntpUDP, "time.nist.gov", utcOffsetInSeconds, 10000);  // Використовуйте новий офсет без додаткової компенсації
@@ -79,7 +85,7 @@ void loop() {
     unsigned long currentMillis = millis();
 
     // Оновлення часу раз на секунду
-    if (currentMillis - lastTimeUpdateMillis >= timeInterval) {
+    if (!isLogoDisplayed && currentMillis - lastTimeUpdateMillis >= timeInterval) {
         lastTimeUpdateMillis = currentMillis;
         syncTime(); // Синхронізація часу
         if (currentDisplayMode == WEATHER && !isStopwatchActive) {
@@ -88,7 +94,7 @@ void loop() {
     }
 
     // Оновлення погоди кожні 10 секунд
-    if (currentMillis - previousMillis >= interval) {
+    if (!isLogoDisplayed && currentMillis - previousMillis >= interval) {
         previousMillis = currentMillis;
         updateWeather();
     }
@@ -96,30 +102,47 @@ void loop() {
     // Вимірювання відстані
     if (currentMillis - lastDistanceMeasureTime >= distanceMeasureInterval) {
         float distance = measureDistance();
-        bool sensorActive = (distance <= DISTANCE_THRESHOLD);
 
-        if (isDistanceStable(distance)) {
-            if (sensorActive && !lastSensorActive) {
-                if (!isStopwatchActive) {
-                    isStopwatchActive = true;
-                    stopwatchStartTime = millis();
-                    currentDisplayMode = STOPWATCH;
-                    Serial.println("Stopwatch started.");
-                } else {
-                    isStopwatchActive = false;
-                    stopwatchElapsedTime = millis() - stopwatchStartTime;
-                    currentDisplayMode = WEATHER;
-                    Serial.println("Stopwatch stopped.");
-                }
+        // Логіка для логотипу (відстань <= 5 см)
+        if (distance <= 5 && (currentMillis - lastDebounceTime) > debounceDelay) {
+            toggleLogo = !toggleLogo;
+            if (toggleLogo) {
+                showImage();  // Виводимо логотип
+                isLogoDisplayed = true;
+            } else {
+                isLogoDisplayed = false;
+                u8g2.clearBuffer();  // Очищаємо екран при вимкненні логотипу
+                u8g2.sendBuffer();
             }
-            lastSensorActive = sensorActive;
+            lastDebounceTime = currentMillis; // Оновлюємо час останнього спрацювання
         }
+
+        // Логіка для секундоміра (відстань <= 20 см, але більше 5 см)
+        if (distance <= 20 && distance > 5 && (currentMillis - lastDebounceTime) > debounceDelay) {
+            if (!isStopwatchActive) {
+                isStopwatchActive = true;
+                stopwatchStartTime = millis();
+            } else {
+                isStopwatchActive = false;
+            }
+            lastDebounceTime = currentMillis;
+        }
+
         lastMeasuredDistance = distance;
         lastDistanceMeasureTime = currentMillis;
     }
 
+    // Якщо логотип не відображається, оновлюємо інші режими
+    if (!isLogoDisplayed) {
+        if (isStopwatchActive) {
+            showStopwatch();
+        } else {
+            showWeather();
+        }
+    }
+
     // Оновлення екрану секундоміра, якщо він запущений
-    if (isStopwatchActive) {
+    if (!isLogoDisplayed && isStopwatchActive) {
         showStopwatch();
     }
 }
