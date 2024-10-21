@@ -18,6 +18,7 @@ void showWelcomeScreen();
 float measureDistance();
 bool isDistanceStable(float currentDistance);
 void checkObjectDetection(unsigned long currentMillis);
+void showError(String errorMessage);
 
 // Налаштування дисплея
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
@@ -26,7 +27,7 @@ String weatherDescription;
 float weatherTemp;
 
 unsigned long previousMillis = 0;
-const long interval = 10000;  // Інтервал оновлення погоди (10 секунд)
+const long interval = 900000;  // Інтервал оновлення погоди (15 хвилин)
 const long timeInterval = 1000; // Інтервал оновлення часу (1 секунда)
 unsigned long lastTimeUpdateMillis = 0;
 
@@ -84,6 +85,11 @@ DisplayMode currentDisplayMode = WEATHER;
 void loop() {
     unsigned long currentMillis = millis();
 
+    // Автоматичне перепідключення до Wi-Fi при втраті з'єднання
+    if (WiFi.status() != WL_CONNECTED) {
+        connectToWiFi();
+    }
+
     // Оновлення часу раз на секунду
     if (!isLogoDisplayed && currentMillis - lastTimeUpdateMillis >= timeInterval) {
         lastTimeUpdateMillis = currentMillis;
@@ -93,7 +99,7 @@ void loop() {
         }
     }
 
-    // Оновлення погоди кожні 10 секунд
+    // Оновлення погоди кожні 15 хвилин
     if (!isLogoDisplayed && currentMillis - previousMillis >= interval) {
         previousMillis = currentMillis;
         updateWeather();
@@ -147,8 +153,6 @@ void loop() {
     }
 }
 
-
-
 bool isDistanceStable(float currentDistance) {
     if (lastMeasuredDistance < 0) return true; // Перше вимірювання
     return abs(currentDistance - lastMeasuredDistance) < DISTANCE_STABILITY_THRESHOLD;
@@ -162,60 +166,16 @@ float measureDistance() {
     delayMicroseconds(10);
     digitalWrite(TRIGGER_PIN, LOW);
     
-    long duration = pulseIn(ECHO_PIN, HIGH);
+    long duration = pulseIn(ECHO_PIN, HIGH, 30000); // Додано таймаут
+    if (duration == 0) {
+        Serial.println("Помилка вимірювання: немає відлуння");
+        return -1; // Немає відлуння
+    }
     float distance = (duration * 0.0343) / 2; // Відстань у см
     return distance;
 }
 
-// Функція для перевірки наявності об'єкта
-void checkObjectDetection(unsigned long currentMillis) {
-    float distance = measureDistance();
-    if (distance <= DISTANCE_THRESHOLD && (currentMillis - lastDebounceTime) > debounceDelay) {
-        if (!isStopwatchActive) { // Зміна з stopwatchRunning на isStopwatchActive
-            isStopwatchActive = true;
-            stopwatchStartTime = millis();
-        } else {
-            isStopwatchActive = false;
-        }
-
-        // Оновлення часу останнього спрацьовування
-        lastDebounceTime = currentMillis;
-    }
-}
-
-void showStopwatch() {
-    unsigned long elapsed = millis() - stopwatchStartTime;
-    int seconds = (elapsed / 1000) % 60;
-    int minutes = (elapsed / 60000);
-
-    u8g2.clearBuffer();
-
-    u8g2.setFont(u8g2_font_cu12_t_cyrillic);
-    u8g2.setCursor(0, 15);
-    u8g2.print("Секундомір");
-
-    u8g2.setFont(u8g2_font_ncenB24_tr);
-    char timeStr[6];
-    sprintf(timeStr, "%02d:%02d", minutes, seconds);
-
-    uint8_t textWidth = u8g2.getStrWidth(timeStr);
-    uint8_t textHeight = u8g2.getMaxCharHeight();
-
-    uint8_t x = (128 - textWidth) / 2;
-    uint8_t y = (64 - textHeight) / 2 + textHeight;
-
-    u8g2.setCursor(x, y);
-    u8g2.print(timeStr);
-
-    u8g2.sendBuffer();
-
-    if (millis() - lastSerialUpdateTime >= serialUpdateInterval && seconds != lastPrintedSecond) {
-        Serial.printf("Stopwatch time: %02d:%02d\n", minutes, seconds);
-        lastSerialUpdateTime = millis();
-        lastPrintedSecond = seconds;
-    }
-}
-
+// Функція для підключення до Wi-Fi з автоматичним перепідключенням
 void connectToWiFi() {
     Serial.println("Attempting to connect to WiFi...");
     WiFi.begin(ssid, password);
@@ -232,6 +192,7 @@ void connectToWiFi() {
         Serial.println("Connected to WiFi");
     } else {
         Serial.println("Failed to connect to WiFi");
+        showError("Немає Wi-Fi");
     }
 }
 
@@ -243,19 +204,25 @@ void updateWeather() {
         int httpCode = http.GET();
 
         if (httpCode > 0) {
-            String payload = http.getString();
-            Serial.println("Weather Payload: " + payload);
-            DynamicJsonDocument doc(2048);
-            deserializeJson(doc, payload);
-            weatherDescription = doc["weather"][0]["description"].as<String>();
-            weatherTemp = doc["main"]["temp"];
-            Serial.printf("Weather updated: %s, %.2f °C\n", weatherDescription.c_str(), weatherTemp);
+            if (httpCode == HTTP_CODE_OK) {
+                String payload = http.getString();
+                Serial.println("Weather Payload: " + payload);
+                DynamicJsonDocument doc(1024); // Зменшено розмір
+                deserializeJson(doc, payload);
+                weatherDescription = doc["weather"][0]["description"].as<String>();
+                weatherTemp = doc["main"]["temp"];
+                Serial.printf("Weather updated: %s, %.2f °C\n", weatherDescription.c_str(), weatherTemp);
+            } else {
+                Serial.printf("HTTP error: %d\n", httpCode);
+            }
         } else {
-            Serial.println("HTTP GET failed: " + String(httpCode));
+            Serial.printf("HTTP request failed: %s\n", http.errorToString(httpCode).c_str());
+            showError("Помилка HTTP");
         }
         http.end();
     } else {
         Serial.println("Not connected to WiFi");
+        showError("Немає Wi-Fi");
     }
 }
 
@@ -293,10 +260,37 @@ void showWeather() {
     u8g2.sendBuffer();  
 }
 
-void showImage() {
+void showStopwatch() {
+    unsigned long elapsed = millis() - stopwatchStartTime;
+    int seconds = (elapsed / 1000) % 60;
+    int minutes = (elapsed / 60000);
+
     u8g2.clearBuffer();
-    u8g2.drawBitmap(0, 0, 16, 128, image); // Переконайтесь, що `image` визначено правильно
+
+    u8g2.setFont(u8g2_font_cu12_t_cyrillic);
+    u8g2.setCursor(0, 15);
+    u8g2.print("Секундомір");
+
+    u8g2.setFont(u8g2_font_ncenB24_tr);
+    char timeStr[6];
+    sprintf(timeStr, "%02d:%02d", minutes, seconds);
+
+    uint8_t textWidth = u8g2.getStrWidth(timeStr);
+    uint8_t textHeight = u8g2.getMaxCharHeight();
+
+    uint8_t x = (128 - textWidth) / 2;
+    uint8_t y = (64 - textHeight) / 2 + textHeight;
+
+    u8g2.setCursor(x, y);
+    u8g2.print(timeStr);
+
     u8g2.sendBuffer();
+
+    if (millis() - lastSerialUpdateTime >= serialUpdateInterval && seconds != lastPrintedSecond) {
+        Serial.printf("Stopwatch time: %02d:%02d\n", minutes, seconds);
+        lastSerialUpdateTime = millis();
+        lastPrintedSecond = seconds;
+    }
 }
 
 void syncTime() {
@@ -307,4 +301,20 @@ void syncTime() {
         Serial.println("Time updated successfully.");
         setTime(timeClient.getEpochTime());
     }
+}
+
+void showError(String errorMessage) {
+    u8g2.clearBuffer();
+    u8g2.setFont(u8g2_font_cu12_t_cyrillic);
+    u8g2.setCursor(0, 30);
+    u8g2.print("Помилка:");
+    u8g2.setCursor(0, 50);
+    u8g2.print(errorMessage);
+    u8g2.sendBuffer();
+}
+
+void showImage() {
+    u8g2.clearBuffer();
+    u8g2.drawBitmap(0, 0, 16, 128, image); // Переконайтесь, що `image` визначено правильно
+    u8g2.sendBuffer();
 }
