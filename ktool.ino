@@ -17,7 +17,7 @@ void updateTime();
 void updateWeather();
 void showWeather();
 void showStopwatch();
-void showLogo();
+void showFlappyBird(); // Нова функція для гри Flappy Bird
 void showMenu();
 void showError(String errorMessage);
 void syncTime();
@@ -32,36 +32,43 @@ NTPClient timeClient(ntpUDP, "time.nist.gov", utcOffsetInSeconds, 10000);
 String weatherDescription;
 float weatherTemp;
 
-unsigned long previousMillis = 0;
-unsigned long stopwatchStartTime = 0;
-bool stopwatchRunning = false;
-const long interval = 900000;  
-unsigned long lastTimeUpdateMillis = 0;
 
-enum DisplayMode { MENU, WEATHER, STOPWATCH, LOGO };
+bool inGame = false;
+
+unsigned long stopwatchStartTime = 0;
+unsigned long previousMillis = 0;
+unsigned long lastObstacleUpdate = 0;
+unsigned long lastPlayerUpdate = 0;
+const long obstacleInterval = 2000;
+const long playerFallInterval = 100;
+
+int lastClkState; // Додаємо цю змінну для стану енкодера
+int playerY = 32; // Початкова позиція гравця
+int gravity = 1;  // Гравітація, яка тягне гравця вниз
+int lift = -5;    // Сила підйому гравця при натисканні кнопки
+bool buttonPressed = false;
+int obstacleX = 128; // Початкова позиція перешкоди по осі X
+int obstacleGap = 20; // Розмір проміжку в перешкодах
+
+enum DisplayMode { MENU, WEATHER, STOPWATCH, FLAPPY_BIRD };
 DisplayMode currentDisplayMode = MENU;
 
-enum MenuItem { WEATHER_ITEM, STOPWATCH_ITEM, LOGO_ITEM };
+enum MenuItem { WEATHER_ITEM, STOPWATCH_ITEM, FLAPPY_BIRD_ITEM };
 MenuItem currentMenuItem = WEATHER_ITEM;
-
-int lastClkState;
-bool buttonPressed = false;
 
 void setup() {
     Serial.begin(115200);
     u8g2.begin();
-    u8g2.clearBuffer();  // Очищення буфера для уникнення графічних артефактів
+    u8g2.clearBuffer();
     connectToWiFi();
     timeClient.begin();
     syncTime();
     updateWeather();
-
+    lastClkState = digitalRead(CLK_PIN);
     pinMode(CLK_PIN, INPUT);
     pinMode(DT_PIN, INPUT);
     pinMode(SW_PIN, INPUT_PULLUP);
-
-    lastClkState = digitalRead(CLK_PIN);
-    showMenu();  // Відображення меню після запуску
+    showMenu();
 }
 
 void loop() {
@@ -72,56 +79,109 @@ void loop() {
     }
 
     int currentClkState = digitalRead(CLK_PIN);
-    if (currentClkState != lastClkState) {
+    
+    // Перевірка обертання енкодера
+    if (currentDisplayMode == MENU && currentClkState != lastClkState) {
         if (digitalRead(DT_PIN) != currentClkState) {
-            if (currentDisplayMode == MENU) {
-                currentMenuItem = (digitalRead(DT_PIN) != currentClkState) ? 
-                                  (MenuItem)((currentMenuItem + 1) % 3) : 
-                                  (MenuItem)((currentMenuItem + 2) % 3);
-                showMenu();
-            }
+            // Обробка напрямку обертання для навігації по меню
+            currentMenuItem = (MenuItem)((currentMenuItem + 1) % 3); // Рух до наступного пункту
+        } else {
+            currentMenuItem = (MenuItem)((currentMenuItem + 2) % 3); // Рух до попереднього пункту
         }
         lastClkState = currentClkState;
+        showMenu(); // Оновлюємо відображення меню після зміни пункту
     }
 
     if (digitalRead(SW_PIN) == LOW && !buttonPressed) {
-        buttonPressed = true;
-        if (currentDisplayMode == MENU) {
-            switch (currentMenuItem) {
-                case WEATHER_ITEM:
-                    currentDisplayMode = WEATHER;
-                    break;
-                case STOPWATCH_ITEM:
-                    currentDisplayMode = STOPWATCH;
-                    stopwatchStartTime = millis(); // Скидаємо стартовий час секундоміра
-                    stopwatchRunning = true;       // Увімкнути відлік часу
-                    break;
-                case LOGO_ITEM:
-                    currentDisplayMode = LOGO;
-                    break;
-            }
-            showCurrentScreen();
-        } else {
-            currentDisplayMode = MENU;
-            showMenu();
-        }
-    } else if (digitalRead(SW_PIN) == HIGH) {
-        buttonPressed = false;
-    }
+    buttonPressed = true;
 
-    if (currentDisplayMode == WEATHER && currentMillis - lastTimeUpdateMillis >= 1000) {
-        lastTimeUpdateMillis = currentMillis;
+    if (currentDisplayMode == MENU) {
+        switch (currentMenuItem) {
+            case WEATHER_ITEM:
+                currentDisplayMode = WEATHER;
+                inGame = false;  // Вихід із гри
+                break;
+            case STOPWATCH_ITEM:
+                currentDisplayMode = STOPWATCH;
+                inGame = false;
+                break;
+            case FLAPPY_BIRD_ITEM:
+                currentDisplayMode = FLAPPY_BIRD;
+                inGame = true;  // Вхід у гру
+                playerY = 32;   // Скидаємо позицію для нової гри
+                obstacleX = 128;
+                break;
+        }
+        showCurrentScreen();
+    } else if (currentDisplayMode == FLAPPY_BIRD && inGame) {
+        // Якщо вже в грі, не виходимо в меню
+        // Можна додати функціонал для керування гравцем у грі тут
+    } else {
+        currentDisplayMode = MENU;
+        inGame = false;  // Вихід із гри
+        showMenu();
+    }
+} else if (digitalRead(SW_PIN) == HIGH) {
+    buttonPressed = false;
+}
+
+    if (currentDisplayMode == FLAPPY_BIRD) {
+        showFlappyBird();
+    } else if (currentDisplayMode == WEATHER && currentMillis - previousMillis >= 1000) {
+        previousMillis = currentMillis;
         syncTime();
         showWeather();
-    }
-
-    if (currentMillis - previousMillis >= interval) {
-        previousMillis = currentMillis;
-        updateWeather();
-    }
-
-    if (currentDisplayMode == STOPWATCH) {
+    } else if (currentDisplayMode == STOPWATCH) {
         showStopwatch();
+    }
+}
+
+
+void showFlappyBird() {
+    unsigned long currentMillis = millis();
+
+    // Оновлення позиції гравця
+    if (currentMillis - lastPlayerUpdate >= playerFallInterval) {
+        playerY += gravity;
+        lastPlayerUpdate = currentMillis;
+    }
+
+    // Підйом гравця при натисканні кнопки
+    if (digitalRead(SW_PIN) == LOW) {
+        playerY += lift;
+    }
+
+    // Оновлення позиції перешкоди
+    if (currentMillis - lastObstacleUpdate >= obstacleInterval) {
+        obstacleX -= 2;
+        if (obstacleX < -10) {
+            obstacleX = 128;
+        }
+        lastObstacleUpdate = currentMillis;
+    }
+
+    // Перевірка зіткнень
+    if ((obstacleX < 10 && (playerY < 25 || playerY > 45)) || playerY > 64 || playerY < 0) {
+        playerY = 32;
+        obstacleX = 128;
+    }
+
+    // Відображення гравця та перешкод
+    u8g2.clearBuffer();
+    u8g2.drawBox(5, playerY, 5, 5); // Гравець
+    u8g2.drawBox(obstacleX, 0, 5, 25); // Верхня частина перешкоди
+    u8g2.drawBox(obstacleX, 45, 5, 64); // Нижня частина перешкоди
+    u8g2.sendBuffer();
+}
+
+void showCurrentScreen() {
+    u8g2.clearBuffer();
+    if (currentDisplayMode == WEATHER) {
+        showWeather();
+    } else if (currentDisplayMode == STOPWATCH) {
+        showStopwatch();
+    } else if (currentDisplayMode == FLAPPY_BIRD) {
+        showFlappyBird();
     }
 }
 
@@ -138,21 +198,11 @@ void showMenu() {
     u8g2.print(currentMenuItem == STOPWATCH_ITEM ? "> Секундомір" : "  Секундомір");
 
     u8g2.setCursor(0, 60);
-    u8g2.print(currentMenuItem == LOGO_ITEM ? "> Лого" : "  Лого");
+    u8g2.print(currentMenuItem == FLAPPY_BIRD_ITEM ? "> Flappy Bird" : "  Flappy Bird");
 
     u8g2.sendBuffer();
 }
 
-void showCurrentScreen() {
-    u8g2.clearBuffer();  // Очищення буфера для уникнення залишкових елементів
-    if (currentDisplayMode == WEATHER) {
-        showWeather();
-    } else if (currentDisplayMode == STOPWATCH) {
-        showStopwatch();
-    } else if (currentDisplayMode == LOGO) {
-        showLogo();
-    }
-}
 
 void connectToWiFi() {
     Serial.println("Attempting to connect to WiFi...");
