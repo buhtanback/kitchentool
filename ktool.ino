@@ -17,7 +17,7 @@ void updateTime();
 void updateWeather();
 void showWeather();
 void showStopwatch();
-void showFlappyBird(); // Нова функція для гри Flappy Bird
+void showFlappyBird();
 void showMenu();
 void showError(String errorMessage);
 void syncTime();
@@ -32,23 +32,22 @@ NTPClient timeClient(ntpUDP, "time.nist.gov", utcOffsetInSeconds, 10000);
 String weatherDescription;
 float weatherTemp;
 
-
 bool inGame = false;
+bool stopwatchRunning = false;
 
 unsigned long stopwatchStartTime = 0;
 unsigned long previousMillis = 0;
-unsigned long lastObstacleUpdate = 0;
-unsigned long lastPlayerUpdate = 0;
-const long obstacleInterval = 2000;
-const long playerFallInterval = 100;
+unsigned long lastDrawTime = 0;
+const long drawInterval = 50;
 
-int lastClkState; // Додаємо цю змінну для стану енкодера
-int playerY = 32; // Початкова позиція гравця
-int gravity = 1;  // Гравітація, яка тягне гравця вниз
-int lift = -5;    // Сила підйому гравця при натисканні кнопки
+int lastClkState;
+int playerY = 32;
+int obstacleX = 128;
+int gapY = 20;
+const int gapHeight = 20;
+int score = 0;
+bool passedObstacle = false;
 bool buttonPressed = false;
-int obstacleX = 128; // Початкова позиція перешкоди по осі X
-int obstacleGap = 20; // Розмір проміжку в перешкодах
 
 enum DisplayMode { MENU, WEATHER, STOPWATCH, FLAPPY_BIRD };
 DisplayMode currentDisplayMode = MENU;
@@ -80,50 +79,59 @@ void loop() {
 
     int currentClkState = digitalRead(CLK_PIN);
     
-    // Перевірка обертання енкодера
     if (currentDisplayMode == MENU && currentClkState != lastClkState) {
         if (digitalRead(DT_PIN) != currentClkState) {
-            // Обробка напрямку обертання для навігації по меню
-            currentMenuItem = (MenuItem)((currentMenuItem + 1) % 3); // Рух до наступного пункту
+            currentMenuItem = (MenuItem)((currentMenuItem + 1) % 3);
         } else {
-            currentMenuItem = (MenuItem)((currentMenuItem + 2) % 3); // Рух до попереднього пункту
+            currentMenuItem = (MenuItem)((currentMenuItem + 2) % 3);
         }
         lastClkState = currentClkState;
-        showMenu(); // Оновлюємо відображення меню після зміни пункту
+        showMenu();
     }
 
     if (digitalRead(SW_PIN) == LOW && !buttonPressed) {
-    buttonPressed = true;
+        buttonPressed = true;
 
-    if (currentDisplayMode == MENU) {
-        switch (currentMenuItem) {
-            case WEATHER_ITEM:
-                currentDisplayMode = WEATHER;
-                inGame = false;  // Вихід із гри
-                break;
-            case STOPWATCH_ITEM:
-                currentDisplayMode = STOPWATCH;
-                inGame = false;
-                break;
-            case FLAPPY_BIRD_ITEM:
-                currentDisplayMode = FLAPPY_BIRD;
-                inGame = true;  // Вхід у гру
-                playerY = 32;   // Скидаємо позицію для нової гри
-                obstacleX = 128;
-                break;
+        if (currentDisplayMode == MENU) {
+            switch (currentMenuItem) {
+                case WEATHER_ITEM:
+                    currentDisplayMode = WEATHER;
+                    inGame = false;
+                    break;
+                case STOPWATCH_ITEM:
+                    currentDisplayMode = STOPWATCH;
+                    inGame = false;
+                    stopwatchRunning = true;
+                    stopwatchStartTime = millis();
+                    break;
+                case FLAPPY_BIRD_ITEM:
+                    currentDisplayMode = FLAPPY_BIRD;
+                    inGame = true;
+                    playerY = 32;
+                    obstacleX = 128;
+                    score = 0;
+                    passedObstacle = false;
+                    break;
+            }
+            showCurrentScreen();
+        } else if (currentDisplayMode == STOPWATCH) {
+            if (stopwatchRunning) {
+                stopwatchRunning = false;  // Зупиняємо секундомір
+            } else {
+                currentDisplayMode = MENU;  // Повернення в меню, якщо секундомір зупинений
+                showMenu();
+            }
+        } else if (currentDisplayMode == FLAPPY_BIRD && inGame) {
+            currentDisplayMode = MENU;
+            inGame = false;
+            showMenu();
+        } else if (currentDisplayMode == WEATHER) {
+            currentDisplayMode = MENU;
+            showMenu();
         }
-        showCurrentScreen();
-    } else if (currentDisplayMode == FLAPPY_BIRD && inGame) {
-        // Якщо вже в грі, не виходимо в меню
-        // Можна додати функціонал для керування гравцем у грі тут
-    } else {
-        currentDisplayMode = MENU;
-        inGame = false;  // Вихід із гри
-        showMenu();
+    } else if (digitalRead(SW_PIN) == HIGH) {
+        buttonPressed = false;
     }
-} else if (digitalRead(SW_PIN) == HIGH) {
-    buttonPressed = false;
-}
 
     if (currentDisplayMode == FLAPPY_BIRD) {
         showFlappyBird();
@@ -136,41 +144,78 @@ void loop() {
     }
 }
 
-
 void showFlappyBird() {
     unsigned long currentMillis = millis();
 
-    // Оновлення позиції гравця
-    if (currentMillis - lastPlayerUpdate >= playerFallInterval) {
-        playerY += gravity;
-        lastPlayerUpdate = currentMillis;
-    }
-
-    // Підйом гравця при натисканні кнопки
-    if (digitalRead(SW_PIN) == LOW) {
-        playerY += lift;
-    }
-
-    // Оновлення позиції перешкоди
-    if (currentMillis - lastObstacleUpdate >= obstacleInterval) {
-        obstacleX -= 2;
-        if (obstacleX < -10) {
-            obstacleX = 128;
+    int currentClkState = digitalRead(CLK_PIN);
+    if (currentClkState != lastClkState) {
+        if (digitalRead(DT_PIN) != currentClkState) {
+            playerY = max(0, playerY - 1);
+        } else {
+            playerY = min(63, playerY + 1);
         }
-        lastObstacleUpdate = currentMillis;
+        lastClkState = currentClkState;
     }
 
-    // Перевірка зіткнень
-    if ((obstacleX < 10 && (playerY < 25 || playerY > 45)) || playerY > 64 || playerY < 0) {
-        playerY = 32;
-        obstacleX = 128;
-    }
+    if (currentMillis - lastDrawTime >= drawInterval) {
+        lastDrawTime = currentMillis;
 
-    // Відображення гравця та перешкод
+        obstacleX -= 2;
+
+        if (obstacleX < -5) {
+            obstacleX = 128;
+            gapY = random(0, 64 - gapHeight);
+            passedObstacle = false;
+        }
+
+        u8g2.clearBuffer();
+        
+        u8g2.drawBox(5, playerY, 5, 5);
+
+        u8g2.drawBox(obstacleX, 0, 5, gapY); 
+        u8g2.drawBox(obstacleX, gapY + gapHeight, 5, 64 - (gapY + gapHeight)); 
+
+        if (obstacleX < 10 && (playerY < gapY || playerY > gapY + gapHeight)) {
+            playerY = 32;
+            obstacleX = 128;
+            score = 0;
+            passedObstacle = false;
+        } else if (obstacleX < 5 && !passedObstacle) {
+            score++;
+            passedObstacle = true;
+        }
+
+        u8g2.setFont(u8g2_font_6x10_tr);
+        u8g2.setCursor(0, 10);
+        u8g2.print("Score: ");
+        u8g2.print(score);
+
+        u8g2.sendBuffer();
+    }
+}
+
+void showStopwatch() {
+    unsigned long elapsed = stopwatchRunning ? millis() - stopwatchStartTime : 0;
+    int seconds = (elapsed / 1000) % 60;
+    int minutes = (elapsed / 60000);
+
     u8g2.clearBuffer();
-    u8g2.drawBox(5, playerY, 5, 5); // Гравець
-    u8g2.drawBox(obstacleX, 0, 5, 25); // Верхня частина перешкоди
-    u8g2.drawBox(obstacleX, 45, 5, 64); // Нижня частина перешкоди
+    u8g2.setFont(u8g2_font_cu12_t_cyrillic);
+    u8g2.setCursor(0, 15);
+    u8g2.print("Секундомір");
+
+    u8g2.setFont(u8g2_font_ncenB24_tr);
+    char timeStr[6];
+    sprintf(timeStr, "%02d:%02d", minutes, seconds);
+
+    uint8_t textWidth = u8g2.getStrWidth(timeStr);
+    uint8_t textHeight = u8g2.getMaxCharHeight();
+
+    uint8_t x = (128 - textWidth) / 2;
+    uint8_t y = (64 - textHeight) / 2 + textHeight;
+
+    u8g2.setCursor(x, y);
+    u8g2.print(timeStr);
     u8g2.sendBuffer();
 }
 
@@ -269,30 +314,7 @@ void showWeather() {
     u8g2.sendBuffer();
 }
 
-void showStopwatch() {
-    unsigned long elapsed = millis() - stopwatchStartTime;
-    int seconds = (elapsed / 1000) % 60;
-    int minutes = (elapsed / 60000);
 
-    u8g2.clearBuffer();
-    u8g2.setFont(u8g2_font_cu12_t_cyrillic);
-    u8g2.setCursor(0, 15);
-    u8g2.print("Секундомір");
-
-    u8g2.setFont(u8g2_font_ncenB24_tr);
-    char timeStr[6];
-    sprintf(timeStr, "%02d:%02d", minutes, seconds);
-
-    uint8_t textWidth = u8g2.getStrWidth(timeStr);
-    uint8_t textHeight = u8g2.getMaxCharHeight();
-
-    uint8_t x = (128 - textWidth) / 2;
-    uint8_t y = (64 - textHeight) / 2 + textHeight;
-
-    u8g2.setCursor(x, y);
-    u8g2.print(timeStr);
-    u8g2.sendBuffer();
-}
 
 void showLogo() {
     u8g2.clearBuffer();
