@@ -25,12 +25,43 @@ void showCurrentScreen();
 
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
 
-WiFiUDP ntpUDP;
-const long utcOffsetInSeconds = 10800;  
-NTPClient timeClient(ntpUDP, "time.nist.gov", utcOffsetInSeconds, 10000);
+
+// Визначаємо значення для літнього і зимового часу
+const long utcOffsetInSecondsWinter = 7200;  // Зимовий час (GMT+2 для вашого UTC+3)
+const long utcOffsetInSecondsSummer = 10800; // Літній час (GMT+3 для вашого UTC+3)
+
 
 String weatherDescription;
 float weatherTemp;
+
+bool showingLogo = true;  // Змінна для контролю відображення логотипу
+unsigned long logoStartTime = 0;  // Час початку відображення логотипу
+const unsigned long logoDisplayDuration = 2000;  
+
+
+
+// Функція для визначення поточного зміщення залежно від сезону
+long getCurrentUtcOffset() {
+    time_t now = time(nullptr);
+    struct tm * timeInfo = localtime(&now);
+    
+    int month = timeInfo->tm_mon + 1; // Місяці від 0 до 11
+    int day = timeInfo->tm_mday;
+
+    if ((month > 3 && month < 10) || (month == 3 && day >= 25) || (month == 10 && day < 25)) {
+        return utcOffsetInSecondsSummer; // Літній час
+    } else {
+        return utcOffsetInSecondsWinter; // Зимовий час
+    }
+}
+
+// Створюємо NTP-клієнт із використанням поточного зміщення часу
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "time.nist.gov", getCurrentUtcOffset(), 10000);
+
+
+unsigned long lastTimeSync = 0; // Змінна для відстеження часу синхронізації
+const unsigned long timeSyncInterval = 60000; // Синхронізація кожні 60 секунд
 
 bool inGame = false;
 bool stopwatchRunning = false;
@@ -55,30 +86,66 @@ DisplayMode currentDisplayMode = MENU;
 enum MenuItem { WEATHER_ITEM, STOPWATCH_ITEM, FLAPPY_BIRD_ITEM };
 MenuItem currentMenuItem = WEATHER_ITEM;
 
+
+
+
+
+
 void setup() {
     Serial.begin(115200);
     u8g2.begin();
     u8g2.clearBuffer();
+    
+    // Встановлення шрифту для коректного відображення українських символів
+    u8g2.enableUTF8Print(); 
+    u8g2.setFont(u8g2_font_cu12_t_cyrillic);
+    u8g2.clearBuffer();   // Очищуємо буфер після встановлення шрифту
+    u8g2.sendBuffer();    // Відправляємо порожній буфер, щоб "освіжити" екран
+
+    // Показ логотипу при запуску
+    showLogo();
+    logoStartTime = millis();
+
     connectToWiFi();
     timeClient.begin();
+    timeClient.setTimeOffset(getCurrentUtcOffset()); // Встановлюємо правильний час при запуску
     syncTime();
     updateWeather();
     lastClkState = digitalRead(CLK_PIN);
     pinMode(CLK_PIN, INPUT);
     pinMode(DT_PIN, INPUT);
     pinMode(SW_PIN, INPUT_PULLUP);
-    showMenu();
 }
+
+
 
 void loop() {
     unsigned long currentMillis = millis();
+
+    if (showingLogo) {
+        if (currentMillis - logoStartTime < logoDisplayDuration) {
+            showLogo();
+        } else {
+            showingLogo = false;
+            u8g2.clearBuffer(); // Додаткове очищення буфера після логотипу
+            showMenu();
+        }
+        return;
+    }
 
     if (WiFi.status() != WL_CONNECTED) {
         connectToWiFi();
     }
 
+    // Періодично синхронізуємо час, щоб оновити з урахуванням можливого переходу на зимовий/літній час
+    if (currentMillis - lastTimeSync >= timeSyncInterval) {
+        lastTimeSync = currentMillis;
+        timeClient.setTimeOffset(getCurrentUtcOffset()); // Оновлюємо зміщення часу
+        timeClient.update();
+    }
+
+    // Обробка обертання енкодера та кнопок
     int currentClkState = digitalRead(CLK_PIN);
-    
     if (currentDisplayMode == MENU && currentClkState != lastClkState) {
         if (digitalRead(DT_PIN) != currentClkState) {
             currentMenuItem = (MenuItem)((currentMenuItem + 1) % 3);
@@ -91,7 +158,6 @@ void loop() {
 
     if (digitalRead(SW_PIN) == LOW && !buttonPressed) {
         buttonPressed = true;
-
         if (currentDisplayMode == MENU) {
             switch (currentMenuItem) {
                 case WEATHER_ITEM:
@@ -102,7 +168,7 @@ void loop() {
                     currentDisplayMode = STOPWATCH;
                     inGame = false;
                     stopwatchRunning = true;
-                    stopwatchStartTime = millis();
+                    stopwatchStartTime = currentMillis;
                     break;
                 case FLAPPY_BIRD_ITEM:
                     currentDisplayMode = FLAPPY_BIRD;
@@ -115,10 +181,9 @@ void loop() {
             }
             showCurrentScreen();
         } else if (currentDisplayMode == STOPWATCH) {
-            if (stopwatchRunning) {
-                stopwatchRunning = false;  // Зупиняємо секундомір
-            } else {
-                currentDisplayMode = MENU;  // Повернення в меню, якщо секундомір зупинений
+            stopwatchRunning = !stopwatchRunning;
+            if (!stopwatchRunning) {
+                currentDisplayMode = MENU;
                 showMenu();
             }
         } else if (currentDisplayMode == FLAPPY_BIRD && inGame) {
@@ -133,6 +198,7 @@ void loop() {
         buttonPressed = false;
     }
 
+    // Виведення відповідного екрану в залежності від режиму
     if (currentDisplayMode == FLAPPY_BIRD) {
         showFlappyBird();
     } else if (currentDisplayMode == WEATHER && currentMillis - previousMillis >= 1000) {
@@ -232,6 +298,7 @@ void showCurrentScreen() {
 
 void showMenu() {
     u8g2.clearBuffer();
+    u8g2.enableUTF8Print(); 
     u8g2.setFont(u8g2_font_cu12_t_cyrillic);
     u8g2.setCursor(0, 15);
     u8g2.print("Меню");
@@ -318,7 +385,8 @@ void showWeather() {
 
 void showLogo() {
     u8g2.clearBuffer();
-    u8g2.drawBitmap(0, 0, 16, 128, image);  // Використовуйте вашу функцію для зображення
+    u8g2.setFont(u8g2_font_cu12_t_cyrillic); // Встановлення шрифту для логотипу
+    u8g2.drawBitmap(0, 0, 16, 128, image);  // Ваш логотип
     u8g2.sendBuffer();
 }
 
